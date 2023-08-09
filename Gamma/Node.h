@@ -4,7 +4,7 @@
 /*	Gamma - Generic processing library
 	See COPYRIGHT file for authors and license information */
 
-#include <stdio.h>
+//#include <stdio.h>
 
 namespace gam{
 
@@ -34,9 +34,6 @@ public:
 
 	/// Returns whether node is linked to other nodes
 	bool linked() const;
-
-	void print(const char * append = "\n", FILE * fp = stdout) const;
-	void printAll(const char * append = "\n", FILE * fp = stdout) const;
 };
 
 
@@ -212,23 +209,6 @@ void Node2<T>::nodeRemove(){
 template <class T>
 bool Node2<T>::linked() const {
 	return nodeL || nodeR;
-}
-
-template <class T>
-void Node2<T>::print(const char * append, FILE * fp) const {
-	fprintf(fp, "%p %p %p%s", nodeL, this, nodeR, append);
-}
-
-template <class T>
-void Node2<T>::printAll(const char * append, FILE * fp) const {
-
-	Node2<T> const * n = &leftmost();
-	
-	while(n){
-		fprintf(fp, n == this ? "(%p) " : " %p  ", n);
-		n = n->nodeR;
-	}
-	fprintf(fp, "%s", append);
 }
 
 } // gam::

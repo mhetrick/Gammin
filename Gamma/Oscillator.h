@@ -92,7 +92,7 @@ public:
 	///		3	. . / /		7	. / / /		b	/ . / /		f	/ / / /			\endverbatim
 	bool seq(uint32_t pattern);
 
-	void onDomainChange(double r);
+	void onDomainChange(double r) override;
 
 //protected:
 private:

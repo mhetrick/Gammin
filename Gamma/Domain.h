@@ -104,8 +104,6 @@ public:
 	double spu() const;					///< Returns samples/unit, i.e. sample rate
 	double ups() const;					///< Returns units/sample, i.e. sample interval
 
-	void print() const;
-
 	/// Master domain. By default, all observers will be attached to this.
 	static Domain& master();
 
