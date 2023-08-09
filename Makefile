@@ -56,7 +56,7 @@ include Makefile.rules
 # Compile and run source files in RUN_DIRS
 EXEC_TARGETS = $(addsuffix *.cpp, $(RUN_DIRS)) $(addsuffix *.c, $(RUN_DIRS)) $(addsuffix *.mm, $(RUN_DIRS))
 .PRECIOUS: $(EXEC_TARGETS)
-$(EXEC_TARGETS): $(LIB_PATH) FORCE
+$(EXEC_TARGETS): FORCE
 	$(CXX) $(ALL_CXXFLAGS) -o $(BIN_DIR)$(*F) $@ $(LIB_PATH) $(LDFLAGS)
 ifneq ($(AUTORUN), 0)
 	@cd $(BIN_DIR) && ./$(*F)
@@ -82,7 +82,7 @@ install: $(LIB_PATH)
 #	@echo 'INSTALL $(DESTDIR)'
 	@$(INSTALL) -d $(DESTDIR)/lib
 	@$(INSTALL) -d $(DESTDIR)/include/$(LIB_NAME)
-	@$(INSTALL) -m 644 $(LIB_PATH) $(DESTDIR)/lib
+	-@$(INSTALL) -m 644 $(LIB_PATH) $(DESTDIR)/lib
 ifneq ($(EXT_LIB_COPY_DIR), )
 	@$(INSTALL) -m 644 $(EXT_LIB_COPY_DIR)/* $(DESTDIR)/lib
 endif

@@ -8,7 +8,6 @@
 	Random variable classes
 */
 
-#include <stdio.h>
 #include <ctime> // time()
 #include "Gamma/gen.h"
 #include "Gamma/std_swap.h"
@@ -253,7 +252,6 @@ inline void RNGTaus::operator=(uint32_t s){
 }
 
 inline void RNGTaus::seed(uint32_t v1, uint32_t v2, uint32_t v3, uint32_t v4){
-	//printf("%d %d %d %d\n", v1, v2, v3, v4);
 	v1 & 0xffffffe ? s1 = v1 : s1 = ~v1;
 	v2 & 0xffffff8 ? s2 = v2 : s2 = ~v2;
 	v3 & 0xffffff0 ? s3 = v3 : s3 = ~v3;

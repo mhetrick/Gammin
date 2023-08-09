@@ -107,7 +107,7 @@ public:
 
 	void freq (Tp v);		///< Set cutoff frequency
 	void freqF(Tp v);		///< Faster, but slightly less accurate than freq()	
-	void zero(){ d1=Tv(0); }
+	void reset(){ d1=Tv(0); } ///< Reset filter state
 	
 	Tv operator()(Tv in);	///< Filters sample
 	
@@ -145,21 +145,26 @@ class Biquad : public Td{
 public:
 
 	/// \param[in]	frq		Center frequency
-	/// \param[in]	res		Resonance (Q) amount in [1, inf)
+	/// \param[in]	res		Resonance (Q) amount in (0, inf)
 	/// \param[in]	type	Type of filter
-	Biquad(Tp frq = Tp(1000), Tp res = Tp(0.707), FilterType type = LOW_PASS);
+	/// \param[in]	lvl		Amplitude level for PEAKING, LOW_SHELF, HIGH_SHELF
+	Biquad(
+		Tp frq = Tp(1000),
+		Tp res = Tp(0.707),
+		FilterType type = LOW_PASS,
+		Tp lvl = Tp(1)
+	);
 
 
 	/// Get array of 3 feedforward coefficients
+	const Tp * a() const { return mA; }
 	Tp * a(){ return mA; }
 	
 	/// Get array of 3 feedback coefficients (first element, b0, is not used)
+	const Tp * b() const { return mB; }
 	Tp * b(){ return mB; }
 
-	const Tp * a() const { return mA; }
-	const Tp * b() const { return mB; }
-
-	/// Set feedforward (a) and feedback (b) coefficients directly
+	/// Set feedforward (a) and feedback (b) coefficients; b0 assumed to be 1
 	void coef(Tp a0, Tp a1, Tp a2, Tp b1, Tp b2);
 
 
@@ -169,7 +174,7 @@ public:
 	void set(Tp frq, Tp res);			///< Set filter center frequency and resonance
 	void set(Tp frq, Tp res, FilterType type);	///< Set all filter params
 	void type(FilterType type);			///< Set type of filter
-	void zero();						///< Zero internal delays
+	void reset();						///< Reset filter state
 
 	Tv operator()(Tv in);				///< Filter next sample
 	Tv nextBP(Tv in);					///< Optimized for band-pass types
@@ -192,6 +197,7 @@ protected:
 	Tp mAlpha, mBeta;
 	Tp mFreqToAng;
 
+	void levelNoResUpdate(Tp v);
 	void resRecip(Tp v);
 };
 
@@ -228,7 +234,7 @@ public:
 		mB1 = poleRadius(v, Td::ups());
 	}
 
-	void zero(){ d1=0; }
+	void reset(){ d1=0; }
 
 	void onDomainChange(double /*r*/){ width(mWidth); }
 
@@ -303,8 +309,8 @@ public:
 		computeCoef1();
 	}
 
-	/// Zero delay elements
-	void zero(){ d2=d1=Tv(0); }
+	/// Reset filter state
+	void reset(){ d2=d1=Tv(0); }
 	
 	void onDomainChange(double r){
 		mFreqToAng = getFreqToAng(Td::ups());
@@ -316,7 +322,7 @@ protected:
 	Filter2(Tp frq, Tp wid)
 	:	mFreq(frq), mWidth(wid)
 	{
-		zero();
+		reset();
 		onDomainChange(1);
 	}
 
@@ -500,10 +506,9 @@ public:
 		);
 	}
 	
-	void zero()
-	{
-		cf0.zero(); cf1.zero(); cf2.zero(); cf3.zero(); cf4.zero(); cf5.zero();
-		sf0.zero(); sf1.zero(); sf2.zero(); sf3.zero(); sf4.zero(); sf5.zero();
+	void reset(){
+		cf0.reset(); cf1.reset(); cf2.reset(); cf3.reset(); cf4.reset(); cf5.reset();
+		sf0.reset(); sf1.reset(); sf2.reset(); sf3.reset(); sf4.reset(); sf5.reset();
 	}
 
 protected:
@@ -534,7 +539,7 @@ public:
 	}
 	
 	Integrator& leak(Tp v){ mb[0]=v; return *this; }
-	Integrator& zero(){ mo[0]=Tv(0); return *this; }
+	Integrator& reset(){ mo[0]=Tv(0); return *this; }
 
 protected:
 	mutable Tv mo[1];
@@ -641,8 +646,7 @@ public:
 	void lag(Tp length, Tp thresh=Tp(0.001));
 
 	void smooth(Tp val);				///< Set smoothing coefficient directly
-	void zero(){ mO1=0; }				///< Zero internal delay
-	void reset(Tv v = Tv(0)){ mO1=mStored=v; }
+	void reset(Tv v = Tv(0)){ mO1=mStored=v; } ///< Reset filter state
 
 	const Tv& operator()();				///< Returns filtered output using stored value
 	const Tv& operator()(Tv in);		///< Returns filtered output from input value
@@ -722,11 +726,12 @@ void AllPass1<Tv,Tp,Td>::onDomainChange(double /*r*/){ freq(mFreq); }
 
 //---- Biquad
 template <class Tv, class Tp, class Td>
-Biquad<Tv,Tp,Td>::Biquad(Tp frq, Tp res, FilterType type)
-:	d1(0), d2(0), mLevel(1), mBeta(1)
+Biquad<Tv,Tp,Td>::Biquad(Tp frq, Tp res, FilterType type, Tp lvl)
+:	d1(0), d2(0), mType(type)
 {
-	onDomainChange(1);
-	set(frq, res, type);
+	mFreqToAng = getFreqToAng(Td::ups());
+	levelNoResUpdate(lvl);
+	set(frq, res);
 }
 
 template <class Tv, class Tp, class Td>
@@ -750,15 +755,15 @@ FilterType Biquad<Tv,Tp,Td>::type() const { return mType; }
 template <class Tv, class Tp, class Td>
 void Biquad<Tv,Tp,Td>::set(Tp freq_, Tp res_, FilterType type_){
 	mType = type_;
-	res(res_);
-	freq(freq_);
+	mResRecip = Tp(0.5)/res_;
+	freq(freq_); // updates coefs based on mResRecip
 }
 
 template <class Tv, class Tp, class Td>
 inline void Biquad<Tv,Tp,Td>::set(Tp frq, Tp res){ set(frq, res, mType); }
 
 template <class Tv, class Tp, class Td>
-void Biquad<Tv,Tp,Td>::zero(){ d1=d2=Tv(0); }
+void Biquad<Tv,Tp,Td>::reset(){ d1=d2=Tv(0); }
 
 template <class Tv, class Tp, class Td>
 void Biquad<Tv,Tp,Td>::coef(Tp a0, Tp a1, Tp a2, Tp b1, Tp b2){
@@ -769,6 +774,28 @@ template <class Tv, class Tp, class Td>
 inline void Biquad<Tv,Tp,Td>::freq(Tp v){
 	mFreq = v;
 	getPole(mReal, mImag, mFreq * mFreqToAng);
+	resRecip(mResRecip);
+}
+
+template <class Tv, class Tp, class Td>
+inline void Biquad<Tv,Tp,Td>::levelNoResUpdate(Tp v){
+	mLevel=v;
+	switch(mType){
+	case PEAKING:
+		mBeta = Tp(1)/(std::max(mLevel, Tp(0.0001)));
+		break;
+	case LOW_SHELF:
+	case HIGH_SHELF:
+		mBeta = Tp(2)*std::pow(mLevel, Tp(0.25));
+		break;
+	default:
+		mBeta = Tp(1);
+	}
+}
+
+template <class Tv, class Tp, class Td>
+inline void Biquad<Tv,Tp,Td>::level(Tp v){
+	levelNoResUpdate(v);
 	resRecip(mResRecip);
 }
 
@@ -790,25 +817,8 @@ inline void Biquad<Tv,Tp,Td>::width(Tp v){
 */
 
 template <class Tv, class Tp, class Td>
-inline void Biquad<Tv,Tp,Td>::level(Tp v){
-	mLevel=v;
-	switch(mType){
-	case PEAKING:
-		mBeta = Tp(1)/mLevel;
-		break;
-	case LOW_SHELF:
-	case HIGH_SHELF:
-		mBeta = Tp(2)*std::pow(mLevel, Tp(0.25));
-		break;
-	default:
-		mBeta = Tp(1);
-	}
-	resRecip(mResRecip);
-}
-
-template <class Tv, class Tp, class Td>
 inline void Biquad<Tv,Tp,Td>::resRecip(Tp v){
-	mResRecip = v;
+	mResRecip = v; // 1 / (2 res)
 	mAlpha = mImag * mResRecip * mBeta;
 
 	switch(mType){

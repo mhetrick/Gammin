@@ -8,6 +8,10 @@
 #include "Gamma/Spatial.h"
 #include "Gamma/Types.h"
 
+#ifndef GAM_HR_SCENE_MAX_AUX
+#define GAM_HR_SCENE_MAX_AUX 4
+#endif
+
 namespace gam{
 
 template <class Vec3>
@@ -30,9 +34,11 @@ float headShadow(const Vec3& earDir, const Vec3& srcDir){
 class HRFilter{
 public:
 
+	typedef Dist<2+1> dist_type;
+
 	HRFilter(){}
 
-	Dist<3>& dist(){ return mDist; }
+	dist_type& dist(){ return mDist; }
 
 	/// Set ear distance (measured from center of head)
 	HRFilter& earDist(float v){ mEarDist = v; return *this; }
@@ -118,15 +124,36 @@ public:
 	}
 
 	/// Return spatialized sample as (left, right, room)
-	float3 operator()(float src){
+	float3 operator()(float src, float undernormal=1e-20){
 		//src += mDist.delayLine().read(mTorsoDelay) * mTorsoAmt;
 		auto res = mDist(src);
+		// Any zero-valued input will devastate the CPU due to denormals 
+		// emerging and propagating through all the IIR filters. We add a small 
+		// inaudible (noise) offset to all filter inputs to prevent this.
+		res += undernormal;
 		for(int i=0;i<2;++i) res[i] = mEarFilters[i](res[i]);
 		return res;
 	}
 
-public:
-	Dist<2+1> mDist;
+	HRFilter& reset(){
+		mDist.reset();
+		for(auto& f : mEarFilters) f.reset();
+		return *this;
+	}
+
+	/// Set auxiliary send channel (negative channel disables)
+	template <int Chan>
+	HRFilter& auxSend(){
+		static_assert(Chan<GAM_HR_SCENE_MAX_AUX, "Invalid aux channel");
+		mAuxSend = Chan;
+		return *this;
+	}
+
+	/// Get auxiliary channel (negative is unassigned)
+	int auxSend() const { return mAuxSend; }
+
+private:
+	dist_type mDist;
 
 	struct EarFilter{
 		Biquad<>
@@ -148,13 +175,22 @@ public:
 			s = pinnaPeak2(s);
 			return s * shadow;
 		}
+
+		void reset(){
+			backShelf.reset();
+			pinnaPeak1.reset();
+			pinnaPeak2.reset();
+			pinnaNotch1.reset();
+			pinnaNotch2.reset();
+		}
 	};
 
 	EarFilter mEarFilters[2];
 
-	float mTorsoAmt=0., mTorsoDelay=0.;
+	//float mTorsoAmt=0., mTorsoDelay=0.;
 	float mEarDist = 0.07; // about half the average bitragion breadth
 	float mRoomSize = 3;
+	int mAuxSend = -1; // auxiliary send channel (negative for none)
 };
 
 
@@ -162,19 +198,34 @@ public:
 template <int Nsrc>
 class HRScene{
 public:
-	typedef HRFilter Source;
+
+	class Source : public HRFilter {
+	public:
+
+		float sample() const { return mSample; }
+		float& sample(){ return mSample; }
+		Source& sample(float v){ mSample=v; return *this; }
+
+		bool active() const { return mActive; }
+		Source& active(bool v){ mActive=v; return *this; }
+
+	private:
+		float mSample = 0.f;
+		bool mActive = true;
+	};
 
 	HRScene(){
-		for(int i=0; i<Nsrc; ++i){
-			mSamples[i] = 0.f;
-			mActive[i] = true;
-		}
 		for(int i=0; i<2; ++i){
 			mReverbs[i].resize(gam::JCREVERB, i*2);
 			mReverbs[i].decay(4);
 			mReverbs[i].damping(0.25);		
 		}
 		far(0.5);
+	}
+
+	HRScene& blockSize(int v){
+		for(auto& s : mSources) s.dist().blockSize(v);
+		return *this;
 	}
 
 	/// Get number of sources
@@ -185,48 +236,68 @@ public:
 	Source& source(int i){ return mSources[i]; }
 
 	/// Set source sample
-	float& sample(int i){ return mSamples[i]; }
+	float& sample(int i){ return source(i).sample(); }
 
 	/// Get source sample
-	const float& sample(int i) const { return mSamples[i]; }
+	float sample(int i) const { return source(i).sample(); }
 
 	/// Set all source samples to zero
-	HRScene& zeroSamples(){ for(auto& v : mSamples) v=0.f; return *this; }
+	HRScene& zeroSamples(){ for(auto& s : mSources) s.sample(0.f); return *this; }
 
 	/// Set all samples to zero and make all sources inactive
 	HRScene& clear(){
-		for(int i=0; i<Nsrc; ++i){
-			mSamples[i] = 0.f;
-			mActive[i] = false;
-		}
+		for(auto& s : mSources) s.sample(0.f).active(false);
 		return *this;
 	}
 
 	/// Set whether a source is active
-	HRScene& active(int i, bool v){ mActive[i]=v; return *this; }
-	bool active(int i) const { return mActive[i]; }
+	HRScene& active(int i, bool v){ source(i).active(v); return *this; }
+	bool active(int i) const { return source(i).active(); }
+
+	/// Get sample on aux channel
+	template <int Chan>
+	float3& aux(){
+		static_assert(0<=Chan && Chan<GAM_HR_SCENE_MAX_AUX, "Invalid aux channel");
+		return mAuxs[Chan];
+	}
+
+	/// Unassign aux send channels of all sources
+	HRScene& auxUnassign(){
+		for(auto& s : mSources) s.template auxSend<-1>();
+		return *this;
+	}
 
 	/// Return next spatialized sample as (left, right, room)
-	float2 operator()(){
+	template <class OnProcessAux>
+	float2 operator()(OnProcessAux onProcessAux){
 
-		// Any zero-valued input will devastate the CPU due to denormals 
-		// emerging and propagating through all the IIR filters. We add some 
-		// inaudible noise to all input samples to prevent this.
-		float noise = mNoise();
+		auto undernormal = mNoise();
+
+		for(auto& a : mAuxs) a = 0.f;
 
 		float3 spat(0,0,0);
-		for(int i=0; i<Nsrc; ++i){
-			if(mActive[i]) spat += mSources[i](mSamples[i] + noise);
+		for(auto& source : mSources){
+			if(source.active()){
+				auto s = source(source.sample(), undernormal);
+				spat += s;
+				if(source.auxSend()>=0) mAuxs[source.auxSend()] += s;
+			}
 		}
 
-		spat[2] *= mWallAtten;
+		onProcessAux();
+		for(auto& a : mAuxs) spat += a;
+
+		spat.at<2>() *= mWallAtten;
+		spat.at<2>() += undernormal;
 
 		float2 echoes(
-			mReverbs[0](spat[2]),
-			mReverbs[1](spat[2])
+			mReverbs[0](spat.at<2>()),
+			mReverbs[1](spat.at<2>())
 		);
-		return spat.get(0,1) + echoes;
+		return spat.sub<2>() + echoes;
 	}
+
+	float2 operator()(){ return (*this)([](){}); }
 
 	HRScene& far(float v){ for(auto& s:mSources) s.dist().far(v); return *this; }
 	HRScene& reverbDecay(float v){ for(auto& r:mReverbs) r.decay(v); return *this; }
@@ -235,10 +306,9 @@ public:
 
 private:
 	Source mSources[Nsrc];
-	float mSamples[Nsrc];			// source input samples
-	bool mActive[Nsrc];
 	ReverbMS<> mReverbs[2]; 		// one reverb for each ear
 	float mWallAtten = 0.1;
+	float3 mAuxs[GAM_HR_SCENE_MAX_AUX];
 	NoiseBinary<RNGMulCon> mNoise{1e-20, 17};
 };
 

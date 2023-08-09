@@ -1,7 +1,6 @@
 /*	Gamma - Generic processing library
 	See COPYRIGHT file for authors and license information */
 
-#include <stdio.h>
 #include "Gamma/Domain.h"
 
 namespace gam{
@@ -28,7 +27,7 @@ DomainObserver::~DomainObserver(){
 			mSubject->mHeadObserver = nodeR;
 		}
 		else{
-			mSubject->mHeadObserver = NULL;
+			mSubject->mHeadObserver = nullptr;
 		}
 	}
 }
@@ -62,11 +61,11 @@ void DomainObserver::domain(Domain& newSubject){
 
 
 Domain::Domain()
-:	mSPU(1.), mUPS(1.), mHeadObserver(NULL), mHasBeenSet(false)
+:	mSPU(1.), mUPS(1.), mHeadObserver(nullptr), mHasBeenSet(false)
 {}
 
 Domain::Domain(double spuA)
-:	mHeadObserver(NULL)
+:	mHeadObserver(nullptr)
 {
 	spu(spuA);
 }
@@ -117,28 +116,6 @@ void Domain::spu(double v){ //printf("[%p] Domain::spu(%g)\n", this, v);
 }
 
 void Domain::ups(double val){ spu(1./val); }
-
-void Domain::print() const {
-	printf("Domain %p:\n\tspu = %f, ups = %f\n", this, spu(), ups());
-
-	DomainObserver * o = mHeadObserver;
-	unsigned numObs = 0;
-	while(o){
-		++numObs;
-		o = o->nodeR;
-	}
-	
-	printf("\t %u observers%s", numObs, numObs ? ": " : "\n");
-
-	if(numObs){
-		o = mHeadObserver;
-		while(o){
-			printf("%p ", o);
-			o = o->nodeR;
-		}
-		printf("\n");
-	}
-}
 
 /*static*/ Domain& Domain::master(){
 	static Domain * s = new Domain;

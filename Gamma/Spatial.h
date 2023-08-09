@@ -13,6 +13,7 @@
 #include "Gamma/Types.h"
 #include "Gamma/Delay.h"
 #include "Gamma/Filter.h"
+#include "Gamma/Ramped.h"
 
 
 namespace gam{
@@ -342,14 +343,41 @@ public:
 	/// \param[in] far			far clipping distance
 	Dist(float maxDelay=0.2, float near=0.1, float far=10);
 
+	/// Set number of samples over which to smooth coefficients
+	Dist& blockSize(int v){ mBlockSize=v; return *this; }
+
+	/// Resets internal coefficient smoothers
+
+	/// Call to re-initialize the object to avoid interpolating from the old 
+	/// state to the new state, like when acquiring the object from a pool.
+	Dist& reset(){ mReset=true; return *this; }
 
 	/// Set near clipping distance
-	Dist& near(float v){ mNear=v; setRollOff(); return *this; }
+	Dist& near(float v){ mNear=v; return updateCoefs(); }
 	float near() const { return mNear; }
 
 	/// Set far clipping distance
-	Dist& far(float v){ mFar=v; setRollOff(); return *this; }
+	Dist& far(float v){ mFar=v; return updateCoefs(); }
 	float far() const { return mFar; }
+
+	/// Set gain at far clipping distance (must be less than 1)
+	Dist& farGain(float v){ mFarGain=v; return updateCoefs(); }
+	float farGain() const { return mFarGain; }
+
+	/// Set whether attenuation goes down to zero at far clip
+
+	/// If true, far gain acts as roll-off where [0,1) -> [impulse, line).
+	///
+	Dist& toZero(bool v){ mToZero=v; return updateCoefs(); }
+
+	/// Set all attenuation function parameters (more efficient)
+	Dist& set(float n, float f, float fgain){
+		mNear=n; mFar=f; mFarGain=fgain;
+		return updateCoefs();
+	}
+	Dist& set(float n, float f, float fgain, bool toZero){
+		mToZero=toZero; return set(n,f, fgain);
+	}
 
 	/// Set speed of sound
 	Dist& speedOfSound(float v){ mInvSpeedOfSound=1./v; return *this; }
@@ -374,19 +402,25 @@ public:
 	/// Get delay line
 	const Delay<T>& delayLine() const { return mDelay; }
 
+	/// Returns attenuation for distance, based on current settings
+	float inverse(float dist) const;
+
 private:
 	Delay<T> mDelay;
 	float mNear, mFar;
-	float mRollOff;
-	float mInvSpeedOfSound;
+	float mFarGain = 0.25;
+	float mA, mB, mC; // coefs for attenuation function
+	float mInvSpeedOfSound = 1./343.2;
+	float mBlockSize = 64.;
 
 	Vec<Ndest,float> mDist;
-	float mDly[Ndest];
-	float mAmp[Ndest];
+	Ramped<T> mDly[Ndest];
+	Ramped<T> mAmp[Ndest];
 	OnePole<T> mLPF[Ndest];
+	bool mToZero = false;
+	bool mReset = true; // used to reset ramps
 
-	void setRollOff();
-	float inverse(float dist) const;
+	Dist& updateCoefs();
 };
 
 
@@ -654,29 +688,36 @@ void ReverbMS<TARG>::print() const {
 
 template<TDEC>
 Dist<TARG>::Dist(float maxDelay, float near, float far)
-:	mDelay(1), mNear(near), mFar(far), mInvSpeedOfSound(1./343.2)
+:	mDelay(maxDelay), mNear(near), mFar(far)
 {
 	for(int i=0; i<Ndest; ++i){
 		mDist[i] = 1e8;
 		mAmp[i] = 0;
 		mDly[i] = 0.001;
 	}
-	setRollOff();
+	updateCoefs();
 }
 
 template<TDEC>
-Dist<TARG>& Dist<TARG>::dist(int dest, float d){
-	mDist[dest]= d;
-	mAmp[dest] = inverse(d);
-	mDly[dest] = d * mInvSpeedOfSound;
-	mLPF[dest].freq(22000 * mAmp[dest]);
+Dist<TARG>& Dist<TARG>::dist(int i, float d){
+	mDist[i] = d;
+	auto amp = inverse(d);
+	auto dly = std::min(d * mInvSpeedOfSound, mDelay.maxDelay());
+	if(mReset){
+		mReset = false;
+		mAmp[i] = amp;
+		mDly[i] = dly;
+	}
+	mAmp[i].target(amp, mBlockSize);
+	mDly[i].target(dly, mBlockSize);
+	mLPF[i].freq(22000 * amp + 20.); // low-pass gate
 	return *this;
 }
 
 template<TDEC>
-Dist<TARG>& Dist<TARG>::dist(int dest, float x, float y, float z){
-	float d = sqrt(x*x+y*y+z*z);
-	return dist(dest, d);
+Dist<TARG>& Dist<TARG>::dist(int i, float x, float y, float z){
+	auto d = std::sqrt(x*x+y*y+z*z);
+	return dist(i, d);
 }
 
 template<TDEC>
@@ -691,24 +732,36 @@ inline Vec<Ndest, T> Dist<TARG>::operator()(T in){
 	mDelay.write(in);
 	Vec<Ndest, T> res;
 	for(int i=0; i<Ndest; ++i)
-		res[i] = mLPF[i](mDelay.read(mDly[i])) * mAmp[i];
+		res[i] = mLPF[i](mDelay.read(mDly[i]())) * mAmp[i]();
 	return res;
 }
 
 template<TDEC>
-void Dist<TARG>::setRollOff(){
-	mRollOff = (mNear/0.25 - mNear) / (mFar - mNear);
+Dist<TARG>& Dist<TARG>::updateCoefs(){
+	/*
+	A(d) = 
+		n / [n + r (d - n)]
+		n / [n + r d - r n]
+		(n/r) / (n/r - n + d)
+	*/
+	auto rollOff = (mNear/mFarGain - mNear) / (mFar - mNear);
+	mA = mNear / rollOff;
+	mB = mA - mNear;
+
+	if(mToZero){
+		auto toZeroGain = 1./(1.-mFarGain);
+		mA *= toZeroGain;
+		mC = mFarGain * toZeroGain;
+	} else {
+		mC = 0.;
+	}
+	return *this;
 }
 
 template<TDEC>
 float Dist<TARG>::inverse(float dist) const {
 	if(dist <= mNear) return 1.f;
-	return mNear / (mNear + mRollOff * (dist - mNear));
-	/*
-	n / [n + r (d - n)]
-	n / [n + r d - r n]
-	1 / [1 - r + r/n d]  or  (n/r) / (n/r - n + d)
-	*/
+	return std::max(mA / (mB + dist) - mC, 0.f);
 }
 
 #undef TDEC

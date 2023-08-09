@@ -21,27 +21,29 @@ class IndexPool{
 public:
 
 	typedef uint64_t bits_t;
-	typedef unsigned index_t;
+	typedef uint8_t index_t;
 	
 	static constexpr index_t npos = ~index_t(0);
 	static constexpr index_t maxSize = sizeof(bits_t)*8;
 
+	static_assert(maxSize < npos, "index_t too small");
+
 
 	/// @param[in]	Maximum number of indices (up to 64)
-	IndexPool(unsigned size = 8)
-	:	mSize(size), mAutoPlay(~bits_t(0))
+	IndexPool(index_t size = 8)
+	:	mSize(size)
 	{
 		recycleAll();
 	}
 
 	/// \returns maximum number of indices
-	unsigned size() const { return mSize; }
+	index_t size() const { return mSize; }
 
 	/// \returns number of indices left in pool
-	unsigned left() const { return mLeft; }
+	index_t left() const { return mLeft; }
 
 	/// \returns number of indices being used in pool
-	unsigned used() const { return mSize-mLeft; }
+	index_t used() const { return mSize-mLeft; }
 
 	bool active(index_t i) const { return !!(mActive & bit(i)); }
 	
@@ -161,8 +163,8 @@ public:
 
 
 	void print(FILE * fp = stderr) const {
-		fprintf(fp, "active (%3d): ", size()-mLeft);
-		for(unsigned i=0; i<size(); ++i){
+		fprintf(fp, "active (%3d): ", used());
+		for(index_t i=0; i<size(); ++i){
 			fprintf(fp, "%c", active(i)?(playing(i)?'|':':'):'.');
 		}
 		fprintf(fp, "\n");
@@ -171,10 +173,10 @@ public:
 private:
 	bits_t mActive;		// bit array of active objects
 	bits_t mPlaying;	// bit array of playing objects
-	unsigned mLeft;		// number of free slots left
-	unsigned mSize;		// maximum number of objects
+	bits_t mAutoPlay = ~bits_t(0);
 	std::map<unsigned, index_t> mIDToIndex;
-	bits_t mAutoPlay;
+	index_t mLeft;		// number of free slots left
+	index_t mSize;		// maximum number of objects
 
 	void obtain(index_t i){
 		auto mask = bit(i);
@@ -204,7 +206,7 @@ private:
 		return deBruijnBitPosition(v & -int64_t(v));
 	}
 
-	static bits_t bit(unsigned i){ return bits_t(1)<<i; }
+	static bits_t bit(index_t i){ return bits_t(1)<<i; }
 };
 
 
@@ -212,13 +214,13 @@ private:
 // These functions are used for measuring amplitude of different sample types.
 namespace{
 	template<unsigned N, class T>
-	T magSqr(const gam::Vec<N,T>& v){ return v.magSqr(); }
+	T ampSqr(const gam::Vec<N,T>& v){ return v.magSqr(); }
 
 	template<class T>
-	T magSqr(const gam::Complex<T>& v){ return v.magSqr(); }
+	T ampSqr(const gam::Complex<T>& v){ return v.magSqr(); }
 
 	template <class T>
-	static T magSqr(T v){ return float(v*v); }
+	static T ampSqr(T v){ return float(v*v); }
 };
 
 
@@ -298,7 +300,7 @@ private:
 	// Returns true if the input has been below the threshold for the
 	// maximum number of samples.
 	bool detectSilence(){
-		if(magSqr(mOutput) < mSilenceThresh){
+		if(ampSqr(mOutput) < mSilenceThresh){
 			++mSilenceCount;
 			return mSilenceCount >= mSilenceCountMax;
 		}
@@ -430,13 +432,9 @@ public:
 	};
 
 
-	Voices()
-	:	mIndexPool(Nvoices), mStealIdx(0), mStealPolicy(OLDEST)
-	{
+	Voices(){
 		mIndexPool.autoPlay(false);
-		for(unsigned i=0; i<Nvoices; ++i){
-			mVoiceGens[i].mParent = this;
-		}
+		for(auto& v : mVoiceGens) v.mParent = this;
 	}
 
 
@@ -444,7 +442,7 @@ public:
 	unsigned size() const { return mIndexPool.size(); }
 
 	/// Get number of active voices
-	unsigned numActive() const { return mIndexPool.size() - mIndexPool.left(); }
+	unsigned numActive() const { return mIndexPool.used(); }
 
 	/// Set whether voices should start playback immediately upon acquisition
 	void autoPlay(bool v){ mIndexPool.autoPlay(v); }
@@ -504,8 +502,32 @@ public:
 
 	/// Start new voice
 
+	/// @param[in] f	Called with newly obtained voice, just before playing it
+	///
+	Voices& attack(const std::function<void(VoiceGen&)>& f){
+		auto& v = obtain();
+		f(v);
+		play(v);
+		return *this;
+	}
+
+	/// Start new voice with given ID (so it can later be released)
+
+	/// @param[in] f	Called with newly obtained voice, just before playing it
+	///
+	Voices& attackWithID(unsigned ID, const std::function<void(VoiceGen&)>& f){
+		auto& v = obtain();
+		f(v);
+		mIndexPool.idToIndex()[ID] = v.mIndex;
+		play(v);
+		return *this;
+	}
+
+	/// Start new voice
+
 	/// This calls Voice::onAttack.
 	///
+	[[deprecated("Use attack(const std::function<void(VoiceGen&)>&)")]]
 	VoiceGen& attack(){
 		auto& v = obtain();
 		v.onAttack(); // user-defined attack
@@ -517,6 +539,7 @@ public:
 
 	/// The arguments are user-defined variables that are forwarded to
 	/// Voice::onAttack. Typical parameters are frequency and amplitude.
+	[[deprecated("Use attack(const std::function<void(VoiceGen&)>&)")]]
 	VoiceGen& attack(double a, double b){
 		auto& v = obtain();
 		v.onAttack(a,b); // user-defined attack
@@ -525,6 +548,7 @@ public:
 	}
 
 	/// Start new voice with given ID
+	[[deprecated("Use attackWithID(unsigned, const std::function<void(VoiceGen&)>&)")]]
 	VoiceGen& attackWithID(unsigned ID){
 		auto& v = attack();
 		mIndexPool.idToIndex()[ID] = v.mIndex;
@@ -532,6 +556,7 @@ public:
 	}
 
 	/// Start new voice with given ID
+	[[deprecated("Use attackWithID(unsigned, const std::function<void(VoiceGen&)>&)")]]
 	VoiceGen& attackWithID(unsigned ID, double a, double b){
 		auto& v = attack(a,b);
 		mIndexPool.idToIndex()[ID] = v.mIndex;
@@ -677,9 +702,9 @@ public:
 
 private:
 	VoiceGen mVoiceGens[Nvoices+1];
-	IndexPool mIndexPool;
-	StealPolicy mStealPolicy;
-	unsigned mStealIdx;
+	IndexPool mIndexPool{Nvoices};
+	StealPolicy mStealPolicy = OLDEST;
+	unsigned mStealIdx = 0;
 	
 	// Returned when voice stealing is off or encounters an error
 	VoiceGen& dummy(){ return mVoiceGens[Nvoices]; }
