@@ -117,7 +117,7 @@ public:
 	virtual ~ArrayBase();
 
 
-	/// Get write reference to element
+	/// Get mutable reference to element
 	T& operator[](uint32_t i);
 
 	/// Get read-only reference to element
@@ -142,14 +142,15 @@ public:
 	ArrayBase& zero();
 
 
-	T * elems();					///< Get writable pointer to elements	
-	const T * elems() const;		///< Get read-only pointer to elements
-	uint32_t size() const;			///< Returns number of elements in array
+	T * data();					///< Get mutable pointer to data
+	const T * data() const;		///< Get read-only pointer to data
+	uint32_t size() const;		///< Returns number of elements in array
+	bool empty() const;			///< Returns whether array is empty
 
-	T * begin(){ return elems(); }
-	const T * begin() const { return elems(); }
-	T * end(){ return elems()+size(); }
-	const T * end() const { return elems()+size(); }
+	T * begin(){ return mData; }
+	const T * begin() const { return mData; }
+	T * end(){ return mData+size(); }
+	const T * end() const { return mData+size(); }
 
 	/// Destroys all elements and frees memory
 	void clear();
@@ -199,7 +200,7 @@ public:
 	}
 
 protected:
-	T * mElems = 0;
+	T * mData = nullptr;
 	S mSize{0};
 
 	bool source(T * src, uint32_t size, bool unmanaged);
@@ -284,7 +285,7 @@ template <class T, class A=gam::Allocator<T> >
 class Ring : public Array<T,A> {
 public:
 
-	typedef Array<T,A> Base; using Base::elems; using Base::size;
+	typedef Array<T,A> Base; using Base::data; using Base::size;
 
 	/// \param[in]	size		Number of elements in ring.
 	/// \param[in]	value		Initial value of all elements.
@@ -362,8 +363,8 @@ public:
 	/// \returns a pointer to the read buffer
 	///
 	T * read(){
-		Ring<T,A>::read(mRead.elems(), mRead.size());
-		return mRead.elems();
+		Ring<T,A>::read(mRead.data(), mRead.size());
+		return mRead.data();
 	}
 
 	/// Copy elements into read buffer "as is" from ring
@@ -371,9 +372,9 @@ public:
 	/// \returns a pointer to the read buffer
 	///
 	T * copy(){
-		mem::deepCopy(mRead.elems(), Ring<T,A>::elems(), mRead.size());
-		//for(uint32_t i=0; i<read.size(); ++i) construct(read.elems()+i, (*this)[i]);
-		return mRead.elems();
+		mem::deepCopy(mRead.data(), Ring<T,A>::data(), mRead.size());
+		//for(uint32_t i=0; i<read.size(); ++i) construct(read.data()+i, (*this)[i]);
+		return mRead.data();
 	}
 
 	/// Resize buffers
@@ -451,7 +452,7 @@ template <class Arr>
 ArrayBase<T,S,A>& ArrayBase<T,S,A>::assign(const Arr& src){
 	unsigned N = src.size();
 	if(N > size()) N = size();
-	for(unsigned i=0; i<N; ++i) A::construct(mElems+i, T(src[i]));
+	for(unsigned i=0; i<N; ++i) A::construct(mData+i, T(src[i]));
 	return *this;
 }
 
@@ -459,7 +460,7 @@ template <class T, class S, class A>
 ArrayBase<T,S,A>& ArrayBase<T,S,A>::assign(
 	const T& v, uint32_t end, uint32_t stride, uint32_t start
 ){
-	for(uint32_t i=start; i<end; i+=stride) A::construct(mElems+i, v);
+	for(uint32_t i=start; i<end; i+=stride) A::construct(mData+i, v);
 	return *this;
 }
 
@@ -469,58 +470,61 @@ ArrayBase<T,S,A>& ArrayBase<T,S,A>::zero(){
 }
 
 template <class T, class S, class A>
-inline T& ArrayBase<T,S,A>::operator[](uint32_t i){ return elems()[i]; }
+inline T& ArrayBase<T,S,A>::operator[](uint32_t i){ return mData[i]; }
 template <class T, class S, class A>
-inline const T& ArrayBase<T,S,A>::operator[](uint32_t i) const { return elems()[i]; }
+inline const T& ArrayBase<T,S,A>::operator[](uint32_t i) const { return mData[i]; }
 
 template <class T, class S, class A>
-inline T * ArrayBase<T,S,A>::elems(){ return mElems; }
+inline T * ArrayBase<T,S,A>::data(){ return mData; }
 template <class T, class S, class A>
-inline const T * ArrayBase<T,S,A>::elems() const { return mElems; }
+inline const T * ArrayBase<T,S,A>::data() const { return mData; }
 
 template <class T, class S, class A>
-void ArrayBase<T,S,A>::clear(){ //printf("ArrayBase::clear(): mElems=%p\n", mElems);
+bool ArrayBase<T,S,A>::empty() const { return !mData || size()==0; }
+
+template <class T, class S, class A>
+void ArrayBase<T,S,A>::clear(){ //printf("ArrayBase::clear(): mData=%p\n", mData);
 
 	// We will only attempt to deallocate the data if it exists and is being 
 	// managed (reference counted) by ArrayBase.
-	if(mElems && managing(mElems)){
-		int& c = refCount()[mElems];
+	if(mData && managing(mData)){
+		int& c = refCount()[mData];
 		--c;
 		if(0 == c){
-			refCount().erase(mElems);
-			for(uint32_t i=0; i<size(); ++i) A::destroy(mElems+i);
-			A::deallocate(mElems, size());
+			refCount().erase(mData);
+			for(uint32_t i=0; i<size(); ++i) A::destroy(mData+i);
+			A::deallocate(mData, size());
 		}
-		mElems=0; mSize(0);
+		mData=nullptr; mSize(0);
 	}
 }
 
 template <class T, class S, class A>
 void ArrayBase<T,S,A>::own(){
-	T * oldElems = elems();
+	T * oldData = mData;
 
 	// If we are not the sole owner, do nothing...
 	if(!isSoleOwner()){
 		uint32_t oldSize = size();
 		clear();
 		resize(oldSize);
-		for(uint32_t i=0; i<size(); ++i) A::construct(mElems+i, oldElems[i]);
+		for(uint32_t i=0; i<size(); ++i) A::construct(mData+i, oldData[i]);
 	}
 }
 
 template <class T, class S, class A>
 bool ArrayBase<T,S,A>::isSoleOwner() const {
-	return references((T*)elems()) == 1;
+	return references((T*)mData) == 1;
 }
 
 template <class T, class S, class A>
 bool ArrayBase<T,S,A>::usingExternalSource() const {
-	return elems() && !managing((T*)elems());
+	return mData && !managing((T*)mData);
 }
 
 template <class T, class S, class A>
 bool ArrayBase<T,S,A>::valid() const {
-	return elems() && (elems() != defaultArray<T>());
+	return mData && (mData != defaultArray<T>());
 }
 
 template <class T, class S, class A>
@@ -534,32 +538,32 @@ void ArrayBase<T,S,A>::resize(uint32_t newSize, const T& c){
 
 	if(newSize != size()){
 
-		T * newElems = A::allocate(newSize);
+		T * newData = A::allocate(newSize);
 
 		// If successful allocation...
-		if(newElems){
+		if(newData){
 
 			uint32_t nOldToCopy = newSize<size() ? newSize : size();
 
 			// Copy over old elements
 			for(uint32_t i=0; i<nOldToCopy; ++i){
-				A::construct(newElems+i, (*this)[i]);
+				A::construct(newData+i, (*this)[i]);
 			}
 
 			// Copy argument into any additional elements
 			for(uint32_t i=nOldToCopy; i<newSize; ++i){
-				A::construct(newElems+i, c);
+				A::construct(newData+i, c);
 			}
 
 			clear();
-			mElems = newElems;
+			mData = newData;
 
-			refCount()[mElems] = 1;
+			refCount()[mData] = 1;
 			mSize(newSize);
 			onResize();
 		}
 	}
-	//printf("ArrayBase::resize(): mElems=%p, size=%d\n", mElems, size());
+	//printf("ArrayBase::resize(): mData=%p, size=%d\n", mData, size());
 }
 
 template <class T, class S, class A>
@@ -567,7 +571,7 @@ inline uint32_t ArrayBase<T,S,A>::size() const { return mSize(); }
 
 template <class T, class S, class A>
 bool ArrayBase<T,S,A>::source(ArrayBase<T,S,A>& src){
-	return source(src.elems(), src.size(), false);
+	return source(src.data(), src.size(), false);
 }
 
 template <class T, class S, class A>
@@ -577,14 +581,14 @@ bool ArrayBase<T,S,A>::source(T * src, uint32_t size){
 
 template <class T, class S, class A>
 bool ArrayBase<T,S,A>::source(T * src, uint32_t size, bool unmanaged){
-	if(src == mElems) return false; // check for self assignment
+	if(src == mData) return false; // check for self assignment
 	if(false==unmanaged){
 		clear();
 		if(managing(src)){
 			++refCount()[src];
 		}
 	}
-	mElems = src;
+	mData = src;
 	mSize(size);
 	onResize();
 	return true;
@@ -646,7 +650,7 @@ void Ring<T,A>::readFrom(T * dst, uint32_t len, int32_t delay, uint32_t from) co
 	uint32_t maxLen = (begin < from ? (from - begin) : (from + (size() - begin))) + 1;
 	len = std::min(len, maxLen);
 
-	mem::copyFromRing(elems(), size(), begin, dst, len);
+	mem::copyFromRing(data(), size(), begin, dst, len);
 }
 
 template<class T, class A>

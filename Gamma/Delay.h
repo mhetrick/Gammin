@@ -434,7 +434,7 @@ TM1 void Delay<TM2>::refreshDelayFactor(){ mDelayFactor = 1.0f/maxDelay(); }
 
 TM1 inline void Delay<TM2>::write(const Tv& v){
 	//incPhase();
-	tbl::put(this->elems(), this->fracBits(), mPhase, v);
+	tbl::put(this->data(), this->fracBits(), mPhase, v);
 	incPhase();
 }
 

@@ -33,7 +33,7 @@ template<
 class SamplePlayer: public Td, public Array<T>{
 public:
 	using Array<T>::size;
-	using Array<T>::elems;
+	using Array<T>::data;
 
 
 	SamplePlayer();
@@ -217,7 +217,7 @@ PRE bool CLS::load(const char * pathToSoundFile){
 	
 	if(sf.openRead()){
 		Array<T>::resize(sf.samples());
-		sf.readAllD(elems());
+		sf.readAllD(data());
 		initBufferAccess(sf.frameRate(), sf.channels(), /*interleaved*/false);
 		sf.close();
 		return true;
@@ -250,7 +250,7 @@ PRE inline T CLS::read(int channel) const {
 	// 11112222
 	int posi = int(pos());
 	// const T * src, index_t iInt, double iFrac, index_t max, index_t min
-	return mIpol(elems() + mStrideChan*channel, posi, pos()-posi, frames()-1, 0, mStrideSamp);
+	return mIpol(data() + mStrideChan*channel, posi, pos()-posi, frames()-1, 0, mStrideSamp);
 }
 
 PRE inline float CLS::readFloat(int channel) const {

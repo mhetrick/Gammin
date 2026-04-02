@@ -34,40 +34,41 @@
 		b->source(*a);
 
 		for(unsigned i=0; i<a->size(); ++i) assert((*a)[i] == 123);
-		assert(a->elems() == b->elems());
+		assert(a->data() == b->data());
 		assert(a->size() == b->size());
-		assert(array_t::references(a->elems()) == 2);
+		assert(array_t::references(a->data()) == 2);
 
 		a->clear();
 		assert(a->size() == 0);
-		assert(a->elems() == 0);
+		assert(a->data() == nullptr);
+		assert(a->empty());
 
 		delete a;
-		assert(array_t::references(b->elems()) == 1);
+		assert(array_t::references(b->data()) == 1);
 
 		{ // setting from raw pointer should not manage
-			auto * c = new array_t(b->elems(), b->size());
-			assert(array_t::references(b->elems()) == 1);
+			auto * c = new array_t(b->data(), b->size());
+			assert(array_t::references(b->data()) == 1);
 		}
 
 		delete b;
-		assert(array_t::references(b->elems()) == 0);
+		assert(array_t::references(b->data()) == 0);
 
 		a = new array_t(N, 123);
 		b = new array_t(*a);
 		
 		b->own();
-		assert(a->elems() != b->elems());
-		assert(array_t::references(a->elems()) == 1);
-		assert(array_t::references(b->elems()) == 1);
+		assert(a->data() != b->data());
+		assert(array_t::references(a->data()) == 1);
+		assert(array_t::references(b->data()) == 1);
 		for(unsigned i=0; i<a->size(); ++i) assert((*b)[i] == 123);
 		
-		t * elemsA = a->elems();
-		t * elemsB = b->elems();
+		t * dataA = a->data();
+		t * dataB = b->data();
 		a->source(*b);
-		assert(a->elems() == b->elems());
-		assert(array_t::references(elemsA) == 0);
-		assert(array_t::references(elemsB) == 2);
+		assert(a->data() == b->data());
+		assert(array_t::references(dataA) == 0);
+		assert(array_t::references(dataB) == 2);
 	}
 
 
