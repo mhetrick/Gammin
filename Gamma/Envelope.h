@@ -569,7 +569,7 @@ public:
 	bool done() const { return mAcc.val >= Tp(1); }
 
 	/// Get current value
-	Tv val() const { return mIpl(scl::min(mAcc.val, Tp(1))); }
+	Tv value() const { return mIpl(scl::min(mAcc.val, Tp(1))); }
 
 	
 	/// Set new end value.  Start value is set to current value.
